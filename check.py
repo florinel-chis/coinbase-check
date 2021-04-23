@@ -3,110 +3,122 @@ import json
 import pytz
 import numpy as np
 import pandas as pd
+from pandas import merge_ordered
 import matplotlib.pyplot as plt
 import datetime
 from dateutil.parser import parse
 import talib
 import time
-
+from mychart import myLineChart
 if(len(sys.argv)>2):
     granularity = sys.argv[1]
-    symbol = sys.argv[2:]    
+    symbols = sys.argv[2:]
 else:
     print("symbol not passed")
     sys.exit(1)
 
-
-def plotGraph(x,y):        
-    plt.style.use('seaborn-whitegrid')
-    plt.rcParams["font.family"] = "Arial"
-    plt.rcParams["font.size"] = "10"
-    plt.xticks(rotation=45)    
-    for idx, el in enumerate(y):        
-        plt.annotate('{0:.2f}'.format(el),(x[idx],y[idx]))
-    
-    peaks = np.where((y[1:-1] > y[0:-2]) * (y[1:-1] > y[2:]))[0] + 1
-    peaksI = np.array(peaks)
-    dips = np.where((y[1:-1] < y[0:-2]) * (y[1:-1] < y[2:]))[0] + 1
-    dipsI = np.array(dips)
-    
-    
-    
-
-    plt.plot (x, y)
-    plt.plot (x[peaksI], y[peaksI], 'o')
-    plt.plot (x[dipsI], y[dipsI], 'o')
-
-    plt.show()
-    
-
-def checkBullish(symbol):
-    print(symbol)
-    
+def getPrices(symbol):
     with open('coinbase/'+symbol+'-'+granularity+'.json', 'r', encoding='utf-8') as f:
-        prices_panda = (pd.read_json(f))
-    
-    prices=[]
-    prices_time = []
-    for p in (prices_panda['close']):        
-        prices.append(p)
+        df = (pd.read_json(f))
+    df['date'] = df['time']
+    df.set_index('date')
+    df.sort_values(by='date', inplace=True, ascending=True)
+    return df
 
-    for p in (prices_panda['time']):        
-        prices_time.append(p)
-    
-    prices = prices[:30]    
-    prices_time = prices_time[:30]
+def addPeaksandDips(prices):
+	y = np.array(prices['close'])
+	peaks = np.where((y[1:-1] > y[0:-2]) * (y[1:-1] > y[2:]))[0] + 1
+	dips = np.where((y[1:-1] < y[0:-2]) * (y[1:-1] < y[2:]))[0] + 1
+	myPeaks = []
+	myDips=[]
 
-    prices.reverse()
-    prices_time.reverse()
-    ta_serie = pd.DataFrame({'close':prices})
+	for idx in range(len(prices['close'])):
+		if idx in peaks:
+			myPeaks.append(1)
+		else:
+			myPeaks.append(0)
+		if idx in dips:
+			myDips.append(1)
+		else:
+			myDips.append(0)
 
-    
-    
-    draft_y = np.asarray(prices)
-    y = draft_y.astype(float)    
-    x = np.asarray(prices_time)
-    x = np.array(x)
-    
-    
-    #plotGraph(x,y)
-    
-    peaks = np.where((y[1:-1] > y[0:-2]) * (y[1:-1] > y[2:]))[0] + 1
-    dips = np.where((y[1:-1] < y[0:-2]) * (y[1:-1] < y[2:]))[0] + 1
-    
-    lastDipIndex = len(dips)-1
-    lastPeakIndex = len(peaks)-1
+	prices['peaks'] = myPeaks
+	prices['dips'] = myDips
+	prices['rsi'] = talib.RSI(prices['close'],timeperiod=13)
 
-    pricePeakI1 = peaks[lastPeakIndex]
-    pricePeakI2 = peaks[lastPeakIndex-1]
+	return prices
 
-    priceDipI1 = dips[lastDipIndex]
-    priceDipI2 = dips[lastDipIndex-1]
+def checkDivergences(df):
+	cLen = len(df)
+	divergencesDf = pd.DataFrame(columns=['date','rsi_divergence'])
+	for idx in range(cLen-2):
+		cPrev = df.iloc[-1-idx]
+		cPrevPrev = df.iloc[-2-idx]
+		if((cPrevPrev['close'] > cPrev['close']) and (cPrevPrev['rsi'] < cPrev['rsi'])):
+			divergencesDf=divergencesDf.append({'date':cPrevPrev['date'],'rsi_divergence':1}, ignore_index=True)
 
-    if(
-        prices[dips[lastDipIndex]] >= prices[dips[lastDipIndex-1]] and  
-        prices[dips[lastDipIndex-1]] >= prices[dips[lastDipIndex-2]]
-        ):
-        print('3 H L ')
+		if((cPrevPrev['close'] < cPrev['close']) and (cPrevPrev['rsi'] > cPrev['rsi'])):
+			divergencesDf = divergencesDf.append({'date':cPrevPrev['date'],'rsi_divergence':-1}, ignore_index=True)
 
-    #check a potential divergence
-    rsis = talib.RSI(y,timeperiod=13)
-    if(prices[pricePeakI1] > prices[pricePeakI2]):
-        if(rsis[pricePeakI1] < rsis[pricePeakI2]):
-            print("RSI down - Bear div "+str(rsis[pricePeakI1])+" / "+str(rsis[pricePeakI2]))        
-    else:
-        if(rsis[pricePeakI1] > rsis[pricePeakI2]):
-            print("RSI UP - Bullish div "+str(rsis[pricePeakI1])+" / "+str(rsis[pricePeakI2]))
 
-    #check for M
-    low1 = prices[priceDipI1]
-    low2 = prices[priceDipI2]
-    lastClose = prices[len(prices)-1]
-    if(lastClose<low1 and lastClose<low2):
-        print("M")
-    #check for w
-    high1 = prices[pricePeakI1]
-    high2 = prices[pricePeakI2]
-    if(high1>=high2 and lastClose > high1):
-        print("W")
-list(map(lambda x:checkBullish(x),symbol))
+	return divergencesDf
+
+def checkW(df):
+	peaks_df = df[df.peaks.eq(1)]
+	last = df.iloc[-1]
+	lpeak = peaks_df.iloc[-1]
+	llpeak = peaks_df.iloc[-2]
+	#go over 2 peaks
+	cond1 = last['close'] > lpeak['close']
+	cond2 = last['close'] > llpeak['close']
+
+	dips_df = df[df.dips.eq(1)]
+	ldip = dips_df.iloc[-1]
+	lldip = dips_df.iloc[-2]
+	cond3 = ldip['close'] >= lldip['close']
+
+	if(cond1 and cond2 and cond3):
+		return 1
+	if((lpeak['close'] > llpeak['close']) and (ldip['close'] >= lldip['close']) and last['close']>llpeak['close']):
+		return 2
+
+
+def checkPriceValue(df):
+	df=df.tail(90)#can check for 180 alt
+	maxPrice = df['close'].max()
+	minPrice = df['close'].min()
+	last = df.iloc[-1]
+	diffPrice = last['close'] - minPrice
+	diffMax = maxPrice - minPrice
+	percent = (diffPrice*100)/diffMax
+
+	return percent
+
+def get50percent(df):
+    df=df.tail(90)
+    maxPrice = df['close'].max()
+    minPrice = df['close'].min()
+    diff = (maxPrice-minPrice)
+    return [minPrice+diff*0.5,minPrice+diff*0.618]
+
+print("symbol","w","price location","[0.50, 0.618] (90 bar)")
+for symbol in symbols:
+    pSorted = getPrices(symbol)
+    if(len(pSorted)<1):
+        continue
+
+    sigChart = addPeaksandDips(pSorted)
+
+    peaks_df = sigChart[sigChart.peaks.eq(1)]
+    d1 = checkDivergences(peaks_df)
+
+    dips_df = sigChart[sigChart.dips.eq(1)]
+    d2 = checkDivergences(dips_df)
+
+    divs = pd.concat([d1,d2])
+    sigChart = (merge_ordered(sigChart, divs, left_by='date', fill_method="ffill"))
+    xW = checkW(sigChart)
+    valS = checkPriceValue(sigChart)
+    print(symbol,xW,valS,get50percent(sigChart))
+    if(xW==1):
+        myLineChart(sigChart,symbol)
