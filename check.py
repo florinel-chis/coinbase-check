@@ -10,19 +10,27 @@ from dateutil.parser import parse
 import talib
 import time
 from mychart import myLineChart
+from tabulate import tabulate
+import glob
+
 if(len(sys.argv)>2):
     granularity = sys.argv[1]
     symbols = sys.argv[2:]
-else:
-    print("symbol not passed")
-    sys.exit(1)
+else:    
+	list_of_files = glob.glob('./coinbase/*-3600.json')
+	symbols = []
+	for f in list_of_files:
+		granularity = '3600'
+		s_name = f.replace('-3600.json','').replace('./coinbase/','')
+		symbols.append(s_name)
 
+    
 def getPrices(symbol):
     with open('coinbase/'+symbol+'-'+granularity+'.json', 'r', encoding='utf-8') as f:
         df = (pd.read_json(f))
     df['date'] = df['time']
     df.set_index('date')
-    df.sort_values(by='date', inplace=True, ascending=True)
+    df.sort_values(by='date', inplace=True, ascending=True)    
     return df
 
 def addPeaksandDips(prices):
@@ -101,24 +109,30 @@ def get50percent(df):
     diff = (maxPrice-minPrice)
     return [minPrice+diff*0.5,minPrice+diff*0.618]
 
-print("symbol","w","price location","[0.50, 0.618] (90 bar)")
+header = ["symbol","w","price location","[0.50]", "[0.618]"]
+rowswithData = []
+
 for symbol in symbols:
-    pSorted = getPrices(symbol)
-    if(len(pSorted)<1):
-        continue
+	pSorted = getPrices(symbol)
+	if(len(pSorted)<1):
+		continue
 
-    sigChart = addPeaksandDips(pSorted)
+	sigChart = addPeaksandDips(pSorted)
 
-    peaks_df = sigChart[sigChart.peaks.eq(1)]
-    d1 = checkDivergences(peaks_df)
+	peaks_df = sigChart[sigChart.peaks.eq(1)]
+	d1 = checkDivergences(peaks_df)
 
-    dips_df = sigChart[sigChart.dips.eq(1)]
-    d2 = checkDivergences(dips_df)
+	dips_df = sigChart[sigChart.dips.eq(1)]
+	d2 = checkDivergences(dips_df)
 
-    divs = pd.concat([d1,d2])
-    sigChart = (merge_ordered(sigChart, divs, left_by='date', fill_method="ffill"))
-    xW = checkW(sigChart)
-    valS = checkPriceValue(sigChart)
-    print(symbol,xW,valS,get50percent(sigChart))
-    if(xW==1):
-        myLineChart(sigChart,symbol)
+	divs = pd.concat([d1,d2])
+	sigChart = (merge_ordered(sigChart, divs, left_by='date', fill_method="ffill"))
+	xW = checkW(sigChart)
+	valS = checkPriceValue(sigChart)
+	levels = get50percent(sigChart)
+	rowData = [symbol,xW,valS,levels[0],levels[1]]
+	rowswithData.append(rowData)
+	if(xW==1 and valS < 70):
+		myLineChart(sigChart,symbol)
+
+print(tabulate(rowswithData, headers=header, tablefmt='orgtbl'))

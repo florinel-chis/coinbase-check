@@ -8,8 +8,14 @@ if(len(sys.argv)>1):
     granularityVal = sys.argv[1]
     symbol = sys.argv[2:]
 else:
-    print("symbol not passed. Usage: " + __file__ + " 900 FIL-EUR")
-    sys.exit(1)
+    client = cbp.PublicClient()    
+    products = client.get_products()
+    symbol = []
+    granularityVal = '3600'
+    for p in products:
+        if(p['quote_currency']=='EUR'):
+            symbol.append(p['id'])
+    
 
 def pullCoinbaseData(symbol):
     client = cbp.PublicClient()    
